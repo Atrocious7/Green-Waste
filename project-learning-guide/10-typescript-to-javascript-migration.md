@@ -24,21 +24,31 @@ Here is the exact technical explanation to present:
 
 ### A. Next.js Framework Expectations (`next-env.d.ts` & `tsconfig.json`)
 - Next.js detects whether `@types/node` or `@types/react` are in `devDependencies`. If present, `next dev` automatically generates and maintains `next-env.d.ts` and `tsconfig.json`.
-- In `tsconfig.json`, the compiler options are specifically tuned for JavaScript:
+- The **actual** `tsconfig.json` in the repository contains:
   ```json
   {
     "compilerOptions": {
       "target": "ES2017",
-      "allowJs": true,        // Allows JavaScript source files to be processed
-      "skipLibCheck": true,   // Skips type checking of node_modules
-      "noEmit": true,         // Instructs TS compiler never to output .js files
+      "lib": ["dom", "dom.iterable", "esnext"],
+      "allowJs": true,           // JS files can be resolved by the compiler
+      "skipLibCheck": true,      // Do not type-check node_modules
+      "strict": true,
+      "noEmit": true,            // Never emit .js output
+      "esModuleInterop": true,
+      "module": "esnext",
+      "moduleResolution": "bundler",
+      "resolveJsonModule": true,
+      "isolatedModules": true,
       "jsx": "react-jsx",
-      "paths": {
-        "@/*": ["./*"]        // Maps import aliases
-      }
-    }
+      "incremental": true,
+      "plugins": [{ "name": "next" }],
+      "paths": { "@/*": ["./*"] }
+    },
+    "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts", ".next/dev/types/**/*.ts", "**/*.mts"],
+    "exclude": ["node_modules"]
   }
   ```
+- Two details worth knowing: `include` lists only TypeScript files, so `.js`/`.jsx` sources are **not** part of the type-check sweep (they are still imported and resolved thanks to `allowJs`), and `"incremental": true` is what produces the `tsconfig.tsbuildinfo` cache file at the project root.
 - Removing `tsconfig.json` would cause Next.js to regenerate it on the next `npm run dev`.
 
 ---
@@ -86,7 +96,7 @@ declare module "next-auth/jwt" {
 ---
 
 ### C. Mongoose Document Declarations (`models/User.d.ts`, `models/Reward.d.ts`)
-These declaration files declare the shape of Mongoose documents (`IUser`, `IReward`), documenting property types (`greenCoins: number`, `status: "active" | "inactive" | "deleted"`) for developers inspecting the code.
+These declaration files declare the shape of Mongoose documents: `IUser` (with `role: "citizen" | "business" | "admin"`, `greenCoins: number`, optional `business: Types.ObjectId`) and `IReward` (`status: "active" | "inactive" | "deleted"`), each exported as a `Model<T>` default. They are documentation/IntelliSense only — the models are actually *defined* in `models/User.js` and `models/Reward.js`, and only those two models have declarations.
 
 ---
 
@@ -110,11 +120,15 @@ This enables imports like `import dbConnect from "@/lib/db"` to resolve instantl
 In `components.json`:
 ```json
 {
+  "style": "base-nova",
   "rsc": true,
-  "tsx": false
+  "tsx": false,
+  "tailwind": { "css": "app/globals.css", "baseColor": "neutral", "cssVariables": true },
+  "iconLibrary": "lucide",
+  "aliases": { "components": "@/components", "utils": "@/lib/utils", "ui": "@/components/ui", "lib": "@/lib", "hooks": "@/hooks" }
 }
 ```
-Setting `"tsx": false` is the official configuration instructing Shadcn to output components in standard JavaScript/JSX when generating UI elements.
+Setting `"tsx": false` is the official configuration instructing Shadcn to output components in standard JavaScript/JSX when generating UI elements. One caveat: the generated primitives currently import `cn` from the `cn` npm package rather than the configured `@/lib/utils` alias, which is why `lib/utils.js` exists but is unused.
 
 ---
 

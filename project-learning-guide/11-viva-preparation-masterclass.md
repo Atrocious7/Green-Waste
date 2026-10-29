@@ -21,7 +21,7 @@ This chapter is your complete study and defense blueprint for presenting **Green
 1. **Frontend Architecture:** *"We adopted the Next.js App Router. Pages like `/dashboard` and `/dashboard/transactions` are React Server Components that fetch directly from MongoDB on the server, resulting in zero client-side bundle overhead and no loading spinners. Highly interactive views, such as `/dashboard/submit` and `/business/dashboard`, are Client Components that manage file previews, clipboard interactions, and reactive state."*
 2. **AI & Cloudinary Integration:** *"When an image is submitted, the server converts the upload into a memory stream buffer and pipes it to Cloudinary. The secure URL is then dispatched to OpenRouter, querying free vision models like `dots-studio`, `nemotron`, or `gemma`. We engineered an in-memory model cooldown map that automatically routes around temporarily rate-limited models, paired with a bracket-depth JSON parser that extracts clean outputs even if the model produces markdown formatting."*
 3. **Data Integrity & Concurrency:** *"Rather than relying on basic CRUD updates, we implemented MongoDB replica-set transactions. When a citizen redeems a voucher, decrementing store inventory, deducting citizen coins, generating a cryptographically secure voucher code, and writing the transaction audit entry all happen inside a single atomic transaction. Furthermore, client-side UUID idempotency keys backed by partial compound unique indexes guarantee that accidental double-clicks can never award duplicate coins or double-charge a user."*
-4. **Security & Authentication:** *"We use NextAuth.js with an encrypted JWT strategy. Edge routing is protected by `middleware.js`. Crucially, to prevent stale-token privilege escalation, our backend API routes call authoritative database guards (`citizenAuth`, `businessAuth`, `adminAuth`) that re-verify the user's real-time permissions directly against MongoDB."*
+4. **Security & Authentication:** *"We use NextAuth.js with an encrypted JWT strategy. Page routing is protected by `middleware.js`, and because that matcher deliberately excludes `/api/*`, every API route begins with an authoritative guard — `getAuthenticatedCitizen`, `getAuthenticatedBusiness`, or `getAuthenticatedAdmin`, all implemented in `lib/auth.js` and re-exported by the role-named files. Each one re-reads the user's role from MongoDB, so a demoted user's stale JWT immediately stops working."*
 
 ---
 
@@ -30,12 +30,22 @@ This chapter is your complete study and defense blueprint for presenting **Green
 Follow these steps to conduct a smooth, error-free live demonstration:
 
 ### Step 1: Pre-Demo Preparation
-- Ensure MongoDB is running and environment variables are configured in `.env.local`.
-- Run the seed script once if starting fresh: `node scripts/seed.js`.
-  - Default Admin: `admin@greensort.local` / `password123`
-  - Default Merchant: `cafe@greenbeans.local` / `password123`
-  - Default Citizen: `user@citizen.local` / `password123` (starts with 1,200 coins)
-- Start the server: `npm run dev` and open `http://localhost:3000/auth/login`.
+- Ensure MongoDB is running and environment variables are configured in `.env.local` (at minimum `MONGODB_URI`, `NEXTAUTH_SECRET`, the three `CLOUDINARY_*` values, and `OPENROUTER_API_KEY`, which is **not** in `.env.local.example`).
+- Run the seed script once if starting fresh. It is an ES module that reads `MONGODB_URI` at import time, so pass the env file explicitly:
+  ```bash
+  node --env-file=.env.local scripts/seed.js
+  ```
+- Seeded accounts (passwords come from the `SEED_*` variables; the fallbacks below are what the script uses when those are unset):
+
+  | Role | Email | Password fallback |
+  | :--- | :--- | :--- |
+  | Admin | `admin@greensort.local` | `adminpass` (`SEED_ADMIN_PASSWORD`) |
+  | Merchant | `cafe@greenbeans.local` | `bizpass` (`SEED_BUSINESS_PASSWORD`) |
+  | Citizen | `user@citizen.local` | `userpass` (`SEED_CITIZEN_PASSWORD`) |
+
+  The citizen starts with **1,200 Green Coins**. The `.env.local.example` file suggests `password123` for all three — if you copied it into `.env.local` and uncommented those lines, use `password123` instead.
+- Seeded rewards: *“₹50 Café Discount”* (**500** coins, qty 50) and *“Free Coffee”* (200 coins, qty 100).
+- Start the server: `npm run dev` and open `http://localhost:3000` (landing page) or `http://localhost:3000/auth/login`.
 
 ### Step 2: Citizen Flow (Waste Upload & AI Reward)
 1. Log in as `user@citizen.local`.
@@ -54,7 +64,7 @@ Follow these steps to conduct a smooth, error-free live demonstration:
 ### Step 3: Citizen Flow (Redeeming a Voucher)
 1. Click **"Rewards & Vouchers"** (`/dashboard/rewards`).
 2. Point out that the list shows rewards published by verified businesses.
-3. Click **"Redeem"** on a ₹50 Café Discount (cost: 200 coins).
+3. Click **"Redeem"** on a ₹50 Café Discount (cost: **500** coins).
 4. Show the instant modal containing the generated voucher code: `GS-XXXXXX-XXXX`.
 5. Click **"Copy Code"** to demonstrate clipboard integration.
 6. Switch to the **"My Vouchers"** tab to show the status is `"pending"`.
@@ -91,7 +101,7 @@ Follow these steps to conduct a smooth, error-free live demonstration:
 > - **External Services:** Cloudinary (media CDN) and OpenRouter (multimodal vision AI).
 
 #### Q3: What user roles exist in the system and how are they separated?
-> **Answer:** There are three roles: `citizen`, `business`, and `admin`. Separation is enforced at the network boundary using Next.js `middleware.js` and verified at the database level inside API handlers using helpers like `getAuthenticatedCitizen()` and `getAuthenticatedAdmin()`.
+> **Answer:** There are three roles: `citizen`, `business`, and `admin`. Separation is enforced at the network boundary by Next.js `middleware.js` (which matches `/admin`, `/business`, `/dashboard`, and `/auth` page paths) and verified at the database level inside every API handler by the guards in `lib/auth.js` — `getAuthenticatedCitizen()`, `getAuthenticatedBusiness()`, and `getAuthenticatedAdmin()`.
 
 #### Q4: Why did you choose MongoDB instead of a relational database like MySQL?
 > **Answer:** MongoDB's flexible document model easily stores nested structures such as AI predicted labels (`predictedLabels: [{ label, score }]`), geo-coordinates, and audit snapshots. Furthermore, with MongoDB replica sets, we achieve ACID transactions across multiple collections while retaining high write speeds for image submission feeds.
@@ -152,11 +162,13 @@ Follow these steps to conduct a smooth, error-free live demonstration:
 
 ## 4. Common Mistakes & Traps to Avoid During Your Viva
 
-1. **Do NOT claim that `app/page.jsx` is your main landing page:**
-   - *Truth:* `app/page.jsx` is the default Next.js template. Explain that the application's actual user flows begin at `/auth/login`, `/dashboard`, `/business/dashboard`, and `/admin/dashboard`.
-2. **Do NOT claim that `lib/categoryMapper.js` is active code:**
-   - *Truth:* `categoryMapper.js` was a prototype keyword-matching helper. The real application uses multimodal vision AI via `lib/ai.js`.
+1. **Do NOT call `app/page.jsx` a leftover template:**
+   - *Truth:* it was a template in an earlier revision, but it is now a real public landing page — sticky header with Sign In/Create Account, hero, and four “How GreenSort Works” cards — served at `/` and allow-listed in `middleware.js`.
+2. **Do NOT mention `lib/categoryMapper.js`, `test.txt`, or `/api/transactions` as current files:**
+   - *Truth:* all three were deleted. Transaction history is a React Server Component (`app/dashboard/transactions/page.jsx`) that reads MongoDB directly; nothing calls `/api/transactions`.
 3. **Do NOT claim that Google Vision API is currently being called:**
-   - *Truth:* Although `.env.local.example` mentions `GOOGLE_VISION_API_KEY` from early prototypes, the active production code in `lib/ai.js` connects to **OpenRouter** (`https://openrouter.ai/api/v1/chat/completions`).
+   - *Truth:* `.env.local.example` still lists a legacy `GOOGLE_VISION_API_KEY`, but the active code in `lib/ai.js` calls **OpenRouter** (`https://openrouter.ai/api/v1/chat/completions`).
 4. **Do NOT claim that transactions work on standalone MongoDB:**
-   - *Truth:* Multi-document transactions require a replica set (`--replSet`). Explain that your code handles this gracefully: `isTransactionUnsupportedError` returns HTTP 503 if transactions are not supported on the host.
+   - *Truth:* Multi-document transactions require a replica set (`--replSet`). Only `/api/waste-submissions` maps that condition to a friendly 503 through `isTransactionUnsupportedError`; the other transactional routes surface a generic 500.
+5. **Do NOT claim the rejection reason is stored on the submission:**
+   - *Truth:* the moderation route sets `submission.moderationNote`, but the field is not declared in `WasteSubmissionSchema`, so Mongoose drops it. The note is only preserved inside the award `Transaction.note`, and a rejected submission keeps no reason in the database. Say this plainly — it is a known gap you can describe as future work.

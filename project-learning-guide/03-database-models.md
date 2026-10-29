@@ -178,6 +178,9 @@ Represents each item of household waste uploaded by a citizen for AI verificatio
 | `location` | `Object` | No | `{ lat: Number, lng: Number }` | Geographic coordinates if GPS metadata is provided. |
 | `createdAt` / `updatedAt` | `Date` | Auto | `timestamps: true` | Timestamps. |
 
+#### Known schema gap: `moderationNote`
+The admin moderation route (`app/api/admin/submissions/[id]/moderate/route.js`) writes `submission.moderationNote = moderationNote.trim()` before saving, but **no `moderationNote` field is declared in `WasteSubmissionSchema`**. Mongoose runs in its default `strict: true` mode, so that path is silently dropped and never stored; the same note is still preserved in the `Transaction.note` string when coins are awarded (`Waste segregation reward - Plastic (moderated: ...)`). If you are asked whether the rejection reason is stored on the submission, the honest answer is *"not yet — it currently only survives inside the award ledger note; the schema needs a `moderationNote: String` field to persist it."*
+
 #### Critical Compound Partial Index
 ```javascript
 WasteSubmissionSchema.index(

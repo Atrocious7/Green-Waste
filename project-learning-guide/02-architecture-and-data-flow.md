@@ -12,6 +12,8 @@ GreenSort is an end-to-end full-stack web application built on the **Next.js 16 
 2. **Businesses:** Create reward listings, set coin costs and stock quantities, track redemption analytics, and verify customer voucher codes at point-of-sale.
 3. **Administrators:** Oversee platform integrity, review low-confidence submissions, audit financial ledgers, verify or suspend businesses, manage user roles, and inspect time-series analytics.
 
+> Routing note: `middleware.js` only matches `/admin/:path*`, `/business/:path*`, `/dashboard/:path*`, and `/auth/:path*`. API requests are **not** intercepted at the edge — the diagram therefore shows the browser calling `/api/*` directly, with `AuthGuards` as the only authorization step on that path.
+
 ```mermaid
 graph TD
     subgraph ClientLayer ["Client Layer (Browser)"]
@@ -43,7 +45,7 @@ graph TD
 
     ClientLayer --> MW
     MW --> RSC
-    MW --> APIRoutes
+    ClientLayer --> APIRoutes
     APIRoutes --> AuthGuards
     AuthGuards --> MongoDB
     RSC --> MongoDB
@@ -62,6 +64,7 @@ A defining strength of GreenSort's Next.js architecture is its hybrid use of **R
 
 ### React Server Components (RSC)
 - **Examples in GreenSort:**
+  - `app/page.jsx` (public landing page — static, no database access)
   - `app/dashboard/page.jsx` (Citizen Dashboard)
   - `app/dashboard/transactions/page.jsx` (Transaction History)
 - **How they work:** These components execute exclusively on the Node.js server during request rendering. They import Mongoose models (`User`, `WasteSubmission`, `Transaction`) and query MongoDB directly without an intermediate `fetch()` call.
@@ -84,7 +87,7 @@ A defining strength of GreenSort's Next.js architecture is its hybrid use of **R
 
 ### A. Waste Submission & AI Classification Pipeline
 The waste lifecycle is the heart of GreenSort. When a citizen uploads a photo:
-1. **Client Preparation:** The user chooses an image in `app/dashboard/submit/page.jsx`. A cryptographic UUID idempotency key is generated and linked to the file's fingerprint (`name:size:lastModified`) in browser `sessionStorage`.
+1. **Client Preparation:** The user chooses an image in `app/dashboard/submit/page.jsx`. A cryptographic UUID idempotency key is generated and linked to the file's fingerprint (`name:size:lastModified:type`) in browser `sessionStorage`.
 2. **Server Handling (`/api/waste-submissions`):**
    - Verifies the user is an active citizen via `getAuthenticatedCitizen()`.
    - Checks MongoDB index `unique_user_waste_submission_idempotency_key` to avoid processing duplicate uploads.
@@ -131,7 +134,7 @@ sequenceDiagram
         API-->>Citizen: 201 Created ("Waste submission created and Green Coins awarded.")
     else Confidence < 70%
         API->>DB: WasteSubmission.create(status: "needs_review", coinsAwarded: 0)
-        API-->>Citizen: 201 Created ("Waste submission created successfully - pending review.")
+        API-->>Citizen: 201 Created ("Waste submission created successfully.")
     end
 ```
 

@@ -21,7 +21,7 @@ graph TD
     K --> L[Select prioritized healthy model from cooldown map]
     L --> M[Send multimodal payload to OpenRouter endpoint]
     M --> N{OpenRouter Response OK?}
-    N -- No: 429/503 --> O[Mark attempted models on cooldown for 45-60s]
+    N -- No: 429/500/502/503/504 --> O[Mark attempted models on cooldown for 45s]
     O --> P[Rollback: deleteUploadedImage from Cloudinary]
     P --> Q[Throw WasteClassificationCapacityError -> HTTP 503]
     N -- Yes: 200 --> R[Extract response text & strip markdown fences]
@@ -101,7 +101,9 @@ function getPrioritizedModels() {
     };
 }
 ```
-- **How it works:** If a model returns HTTP 429 (Too Many Requests) or HTTP 503, `markModelCooldown(model)` flags that model in `modelCooldownMap` for 60 seconds. Subsequent user submissions immediately rotate to the next healthy model, preventing recurring timeouts!
+- **How it works:** If a model returns one of `RETRYABLE_STATUSES` (`429, 500, 502, 503, 504`), the route marks **every** attempted model on cooldown and throws `WasteClassificationCapacityError` (HTTP 503). The cooldown duration is **45 seconds** for this HTTP-error path (`markModelCooldown(model, 45 * 1000)`), while the default `MODEL_COOLDOWN_MS` of **60 seconds** is used when OpenRouter answers with a later model in the fallback list — the models it skipped are cooled down for 60 s.
+- **What is not retried:** a 404 whose body says the model/endpoint is unavailable, or a 403 mentioning an *"agentic harness"* restriction, is classified as non-retryable (`model_unavailable` / `agentic_harness_restriction`) and logged with that `failureReason` before a generic error is thrown (→ HTTP 502 at the route).
+- **Diagnostics:** every branch logs through `logOpenRouterFailure()` with a `stage` label (`request_failed_before_response`, `http_error_response`, `invalid_success_response_json`, `missing_classification_content`, `invalid_classification_json`, `incomplete_classification_data`, `unsupported_classification_category`, `invalid_classification_confidence`).
 
 ---
 
@@ -121,6 +123,18 @@ Return exactly one JSON object with a category string and numeric confidence fro
 {"category":"Plastic","confidence":95}
 
 Do not add explanations or markdown.
+
+If the image is ambiguous, choose the most likely category and lower the confidence.
+
+Examples:
+- plastic bottle → Plastic
+- newspaper/cardboard → Paper
+- glass bottle/jar → Glass
+- aluminum/metal can → Metal
+- food scraps/vegetable waste → Organic
+- electronic device/circuit/charger → E-waste
+- contaminated/mixed/unclassifiable waste → Non-recyclable
+
 Do not calculate or mention Green Coins.
 ```
 
@@ -185,9 +199,21 @@ function findSingleJsonObject(value) {
 
 ## 6. Diagnostic Privacy & Redaction
 
-In production, server error logs should never leak user credentials, authentication tokens, or personal identifiers. `lib/ai.js` includes diagnostic sanitizers:
+In production, server error logs should never leak credentials or signed asset URLs. `lib/ai.js` includes a diagnostic sanitiser:
 
-- `sanitizeDiagnosticText()`: Regex-redacts API keys (`Bearer [REDACTED]`), Cloudinary image links, user emails, and phone numbers before writing to console logs.
+```javascript
+function sanitizeDiagnosticText(value, apiKey) {
+    return value
+        .replaceAll(apiKey, "[REDACTED_API_KEY]")
+        .replace(/(authorization\s*[:=]\s*bearer\s+)[^\s"']+/gi, "$1[REDACTED]")
+        .replace(/https?:\/\/res\.cloudinary\.com\/[^\s"']+/gi, "[CLOUDINARY_URL_REDACTED]")
+        .slice(0, 3000);
+}
+```
+
+- It redacts the OpenRouter API key, any `Authorization: Bearer …` value, and Cloudinary delivery URLs, and truncates every field to 3000 characters.
+- It does **not** strip email addresses or phone numbers — the correct claim in a viva is *"logs are limited to sanitised provider output: key, bearer token, and image URL redaction plus length caps"*, not *"all PII is redacted"*.
+- `getSafeChoiceMessageKeys()` goes one step further and logs only the **field names** of `choices[0].message` (never its content) when the model returns no usable text.
 
 ---
 
@@ -195,10 +221,11 @@ In production, server error logs should never leak user credentials, authenticat
 
 | Variable Name | Purpose | Sensitivity |
 | :--- | :--- | :--- |
-| `OPENROUTER_API_KEY` | Bearer token used to authenticate requests against OpenRouter. | **High Secret** (Server only) |
+| `OPENROUTER_API_KEY` | Bearer token used to authenticate requests against OpenRouter. **Required** — the route returns 503 *"AI image classification is not configured."* when it is missing. It is *not* listed in `.env.local.example`, so add it yourself. | **High Secret** (Server only) |
 | `CLOUDINARY_CLOUD_NAME` | Cloudinary account namespace for asset hosting. | Medium (Server only) |
 | `CLOUDINARY_API_KEY` | Cloudinary API access key. | **High Secret** (Server only) |
 | `CLOUDINARY_API_SECRET` | Cloudinary API secret for signing stream uploads. | **High Secret** (Server only) |
 | `CONFIDENCE_THRESHOLD` | Minimum percentage (default: `70`) required to automatically approve waste and award coins. | Public / Config |
-| `MAX_UPLOAD_SIZE_BYTES` | Maximum image size in bytes (default: `5242880` = 5MB). | Public / Config |
+| `MAX_UPLOAD_SIZE_BYTES` | Server-side maximum image size in bytes (default: `5242880` = 5 MB). | Public / Config |
+| `NEXT_PUBLIC_MAX_UPLOAD_SIZE_BYTES` | Optional client-side mirror of the same limit used by `app/dashboard/submit/page.jsx`. Not present in `.env.local.example`; the client falls back to 5 MB. If you raise the server limit, raise this one too or the browser will reject the file before the request is sent. | Public / Config |
 | `GOOGLE_VISION_API_KEY` | Listed in `.env.local.example` as an optional legacy placeholder; the active implementation uses OpenRouter. | Optional |

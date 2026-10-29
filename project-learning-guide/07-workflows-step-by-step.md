@@ -10,9 +10,10 @@ This chapter traces the 13 essential workflows of **GreenSort** from the user's 
 2. **Client Validation:** React Hook Form and Zod (`registerSchema`) validate that the email is syntactically correct and passwords match.
 3. **API Call:** A `POST` request is sent to `/api/auth/register` with `{ name, email, password, role: "citizen" }`.
 4. **Backend Processing:**
-   - Checks for duplicate email with `User.findOne({ email })`.
+   - Normalises the email to lowercase/trimmed and checks for a duplicate with `User.findOne({ email }).select("_id")` — a racing duplicate is still caught by the unique index and mapped to 409.
    - Hashes the password using `bcrypt.hash(password, 10)`.
-   - Saves a new `User` document with `role: "citizen"` and `greenCoins: 0`.
+   - For a **citizen**: saves one `User` document with `role: "citizen"` and `greenCoins: 0`.
+   - For a **business**: opens a transaction and creates the `User` + a `Business` profile (`verified: false`), then stores the `Business` id on the user — an orphaned user account can never be left behind.
 5. **Redirection to Login:** Client receives HTTP 201 and redirects to `/auth/login`.
 6. **Sign In Execution:** User enters credentials and clicks "Sign In".
    - `signIn("credentials", { email, password, redirect: false })` is called.
@@ -62,8 +63,9 @@ This chapter traces the 13 essential workflows of **GreenSort** from the user's 
      User.findOneAndUpdate({ _id: userId }, { $inc: { greenCoins: 15 } });
      Transaction.create([{ userId, type: "award", amount: 15, note: "Waste segregation reward - Plastic" }]);
      ```
-   - Transaction commits. Returns HTTP 201.
-7. **Client Feedback:** Sonner displays *"Waste submitted successfully."* and redirects the user to `/dashboard` with updated coins.
+   - Transaction commits. Returns HTTP 201 with *"Waste submission created and Green Coins awarded."*
+   - If confidence is below 70%, or the category maps to 0 coins (`Non-recyclable`), the route skips the transaction entirely and simply inserts the document with `status: "needs_review"`, returning 201 with *"Waste submission created successfully."*
+7. **Client Feedback:** A Sonner toast confirms the submission and the page redirects to `/dashboard`, where the React Server Component re-reads the balance and shows the updated coin total.
 
 ---
 
@@ -122,7 +124,7 @@ This chapter traces the 13 essential workflows of **GreenSort** from the user's 
        { $set: { status: "redeemed" } }
      );
      ```
-5. **Confirmation:** If status was `"pending"`, it transitions to `"redeemed"`. The merchant dashboard displays a green success card showing the customer's name and reward title. If scanned again, it returns HTTP 400 *"This voucher has already been redeemed."*
+5. **Confirmation:** If status was `"pending"`, it transitions to `"redeemed"`. The merchant dashboard displays a green success card showing the customer's name, reward title, coins used, and the redemption date. Scanning the same code again returns HTTP 400 with *"This voucher has already been redeemed (<date>). Duplicate use is prohibited."*, while two simultaneous scans produce one success and one HTTP 409 *"Voucher was already redeemed or is currently being processed by another request."*
 
 ---
 
@@ -153,9 +155,10 @@ This chapter traces the 13 essential workflows of **GreenSort** from the user's 
 1. **User Action:** Admin navigates to `/admin/users` and clicks "Change Role" on a user.
 2. **API Dispatch:** `PATCH /api/admin/users/[id]/role` with `{ role: "admin" }` or `{ role: "citizen" }`.
 3. **Concurrency-Safe Transaction:**
-   - Touches `AdminRoleGuard` version lock to serialize concurrent updates.
-   - If demoting an admin, counts total admins: `User.countDocuments({ role: "admin" })`. If $\le 1$, throws error: *"Cannot demote the last remaining administrator."*
-   - Updates `user.role` and commits.
+   - Upserts the `AdminRoleGuard` document (`_id: "admin-role-changes"`, `$setOnInsert: { version: 0 }`) so the lock row exists even on a brand-new database.
+   - Inside the transaction, increments that row's `version` to serialize concurrent updates, then re-reads the target user with the session.
+   - If demoting an admin, counts total admins: `User.countDocuments({ role: "admin" }).session(session)`. If $\le 1$, aborts with HTTP 400 *"Cannot demote or remove the last remaining administrator."*
+   - Updates `user.role`, commits, and returns 200 with the updated user summary.
 
 ---
 

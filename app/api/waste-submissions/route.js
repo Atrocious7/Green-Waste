@@ -43,6 +43,14 @@ function isTransactionUnsupportedError(error) {
 function existingSubmissionResponse(submissionId) {
     return NextResponse.json({ message: "This submission was already received.", submissionId }, { status: 200 });
 }
+// Looks up the id of a submission this citizen already saved under the same request key.
+// Returns null when there is none.
+async function findExistingSubmissionId(userId, idempotencyKey) {
+    const existingSubmission = await WasteSubmission.findOne({ userId, idempotencyKey })
+        .select("_id")
+        .lean();
+    return existingSubmission?._id ?? null;
+}
 export async function POST(request) {
     const auth = await getAuthenticatedCitizen("Only citizens can submit waste.");
     if (auth.errorResponse)
@@ -87,27 +95,9 @@ export async function POST(request) {
         buffer = Buffer.from(await file.arrayBuffer());
         await dbConnect();
         await Promise.all([WasteSubmission.init(), Transaction.init()]);
-        console.info("Waste submission idempotency lookup", {
-            idempotencyKey,
-            idempotencyKeyLength: idempotencyKey.length,
-            sessionUserId: auth.user.id,
-            databaseName: mongoose.connection.db?.databaseName,
-            connectionReadyState: mongoose.connection.readyState,
-        });
-        const existingSubmission = await WasteSubmission.findOne({
-            userId: auth.user.id,
-            idempotencyKey,
-        })
-            .select("_id")
-            .lean();
-        console.info("Waste submission idempotency lookup result", {
-            idempotencyMatchFound: Boolean(existingSubmission),
-            existingSubmissionId: existingSubmission?._id?.toString(),
-            existingSubmissionUserId: existingSubmission?.userId?.toString(),
-            existingSubmissionKey: existingSubmission?.idempotencyKey,
-        });
-        if (existingSubmission) {
-            return existingSubmissionResponse(existingSubmission._id);
+        const existingSubmissionId = await findExistingSubmissionId(auth.user.id, idempotencyKey);
+        if (existingSubmissionId) {
+            return existingSubmissionResponse(existingSubmissionId);
         }
     }
     catch {
@@ -183,11 +173,9 @@ export async function POST(request) {
         catch (error) {
             await deleteUploadedImage(uploadedImage.public_id);
             if (isDuplicateKeyError(error)) {
-                const existingSubmission = await WasteSubmission.findOne({ userId: auth.user.id, idempotencyKey })
-                    .select("_id")
-                    .lean();
-                if (existingSubmission)
-                    return existingSubmissionResponse(existingSubmission._id);
+                const existingSubmissionId = await findExistingSubmissionId(auth.user.id, idempotencyKey);
+                if (existingSubmissionId)
+                    return existingSubmissionResponse(existingSubmissionId);
             }
             console.error("Waste submission database save failed.");
             return NextResponse.json({ error: "Unable to save your submission right now." }, { status: 500 });
@@ -232,11 +220,9 @@ export async function POST(request) {
     catch (error) {
         await deleteUploadedImage(uploadedImage.public_id);
         if (isDuplicateKeyError(error)) {
-            const existingSubmission = await WasteSubmission.findOne({ userId: auth.user.id, idempotencyKey })
-                .select("_id")
-                .lean();
-            if (existingSubmission)
-                return existingSubmissionResponse(existingSubmission._id);
+            const existingSubmissionId = await findExistingSubmissionId(auth.user.id, idempotencyKey);
+            if (existingSubmissionId)
+                return existingSubmissionResponse(existingSubmissionId);
             return NextResponse.json({ error: "This upload is already being processed. Retry the same request shortly." }, { status: 409 });
         }
         if (isTransactionUnsupportedError(error)) {

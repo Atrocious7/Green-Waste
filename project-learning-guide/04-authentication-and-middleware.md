@@ -204,43 +204,90 @@ export const config = {
 A common vulnerability in basic JWT setups is **stale role authorization**:
 > *Scenario:* An administrator demotes an abusive merchant or suspends their account. However, the merchant's browser still holds a valid JWT cookie with `role: "business"` issued an hour ago.
 
-To eliminate this vulnerability, GreenSort implements **three authoritative server guards** in `lib/`:
-1. `lib/citizenAuth.js` (`getAuthenticatedCitizen`)
-2. `lib/businessAuth.js` (`getAuthenticatedBusiness`)
-3. `lib/adminAuth.js` (`getAuthenticatedAdmin`)
+To eliminate this vulnerability, GreenSort implements **three authoritative server guards**, all defined in a single module:
+1. `lib/auth.js` → `getAuthenticatedCitizen`
+2. `lib/auth.js` → `getAuthenticatedBusiness`
+3. `lib/auth.js` → `getAuthenticatedAdmin`
 
-### Code Example: `lib/citizenAuth.js`
+The three old files still exist, but only as one-line re-exports so that route imports keep their role-specific names:
 
 ```javascript
-export async function getAuthenticatedCitizen(forbiddenMessage = "Forbidden. Citizen account credentials required.") {
-    let session;
-    try {
-        session = await getServerSession(authOptions);
-    } catch {
-        return { errorResponse: NextResponse.json({ error: "Unable to verify your session." }, { status: 500 }) };
-    }
-    if (!session?.user?.id) {
-        return { errorResponse: NextResponse.json({ error: "Unauthorized. Please log in." }, { status: 401 }) };
-    }
+// lib/citizenAuth.js
+export { getAuthenticatedCitizen } from "@/lib/auth";
 
-    try {
-        await dbConnect();
-        // RE-QUERY MONGODB TO CHECK REAL-TIME ROLE:
-        const citizen = await User.findById(session.user.id).select("role greenCoins").lean();
-        if (!citizen) {
-            return { errorResponse: NextResponse.json({ error: "Unauthorized. Please log in." }, { status: 401 }) };
-        }
-        if (citizen.role !== "citizen") {
-            return { errorResponse: NextResponse.json({ error: forbiddenMessage }, { status: 403 }) };
-        }
-        return { user: session.user, citizen };
-    } catch (error) {
-        return { errorResponse: NextResponse.json({ error: "Internal server error verifying citizen permissions." }, { status: 500 }) };
-    }
+// lib/businessAuth.js
+export { getAuthenticatedBusiness } from "@/lib/auth";
+
+// lib/adminAuth.js
+export { getAuthenticatedAdmin } from "@/lib/auth";
+```
+
+### Shared session check: `getSessionUser()`
+
+All three guards start with the same private helper, which means the 401/500 handling for a missing or broken session exists exactly once:
+
+```javascript
+// lib/auth.js (private helper)
+async function getSessionUser() {
+  let session;
+  try {
+    session = await getServerSession(authOptions);
+  } catch {
+    return {
+      errorResponse: NextResponse.json(
+        { error: "Unable to verify your session." },
+        { status: 500 }
+      ),
+    };
+  }
+
+  if (!session?.user?.id) {
+    return {
+      errorResponse: NextResponse.json(
+        { error: "Unauthorized. Please log in." },
+        { status: 401 }
+      ),
+    };
+  }
+
+  return { sessionUser: session.user };
 }
 ```
 
-### Key Differences between the Guards:
-- **`lib/citizenAuth.js`:** Loads `greenCoins` balance alongside `role` so endpoints like `/api/rewards` know the user's real balance immediately.
-- **`lib/businessAuth.js`:** Verifies that `role === "business"` and queries the `Business` collection using `{ userId: user.id }`. It returns the actual `business` document. This guarantees that `businessId` is **never trusted from client input**, preventing one merchant from modifying another merchant's rewards.
-- **`lib/adminAuth.js`:** Re-queries `User.findById(id)` and ensures `dbUser.role === "admin"`.
+Every guard is then the same three steps — session, database re-read, role comparison:
+
+```javascript
+const sessionResult = await getSessionUser();
+if (sessionResult.errorResponse) return sessionResult;
+const sessionUser = sessionResult.sessionUser;
+
+try {
+  await dbConnect();
+  const citizen = await User.findById(sessionUser.id)
+    .select("role greenCoins")
+    .lean();
+  if (!citizen) {
+    return { errorResponse: NextResponse.json({ error: "Unauthorized. Please log in." }, { status: 401 }) };
+  }
+  if (citizen.role !== "citizen") {
+    return { errorResponse: NextResponse.json({ error: forbiddenMessage }, { status: 403 }) };
+  }
+  return { user: sessionUser, citizen };
+} catch (error) {
+  console.error("[citizenAuth] Error verifying citizen session:", error);
+  return { errorResponse: NextResponse.json({ error: "Internal server error verifying citizen permissions." }, { status: 500 }) };
+}
+```
+
+### Key Differences between the Guards
+
+| Guard | Database check | Success return value | Failure messages |
+| :--- | :--- | :--- | :--- |
+| `getAuthenticatedCitizen(forbiddenMessage)` | `User.findById(id).select("role greenCoins").lean()` | `{ user, citizen }` — plain object with the live balance | 401 missing user, 403 `forbiddenMessage` (default *"Forbidden. Citizen account credentials required."*) |
+| `getAuthenticatedBusiness()` | `User.findById(id).select("role").lean()`, then a `Business` lookup | `{ business, user }` — the Mongoose `Business` document | 401 missing user, 403 *"Forbidden. Business account credentials required."*, 404 *"No business profile associated with this account."* |
+| `getAuthenticatedAdmin()` | `User.findById(id)` (full document) | `{ user, dbUser }` — the Mongoose `User` document | 401 missing user, 403 *"Forbidden. Administrator credentials required."* |
+
+- **Citizen:** selects `greenCoins` alongside `role` so endpoints like `/api/rewards` can return `userCoins` immediately without a second query.
+- **Business:** resolves the `Business` document in two steps — first `{ _id: user.businessId, userId: user.id }` (only when the session `businessId` is a valid ObjectId), then the fallback `{ userId: user.id }` if that returns nothing. Because both queries include the session user id, `businessId` is **never trusted from client input**, which is what stops one merchant from editing another merchant's rewards.
+- **Admin:** returns the full Mongoose document instead of `.lean()`, because the role-change route needs to save it inside a transaction.
+- **Logging:** each guard writes a tagged `console.error` / `console.warn` (`[adminAuth]`, `[citizenAuth]`, `[businessAuth]`) so a failing guard is identifiable in server logs.

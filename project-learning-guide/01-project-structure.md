@@ -24,7 +24,6 @@ d:\CODES_D\nextjs-ca2/
 ├── package-lock.json                  # Deterministic dependency lockfile
 ├── postcss.config.mjs                 # PostCSS configuration for Tailwind CSS v4
 ├── README.md                          # Project overview documentation
-├── test.txt                           # Empty test scratch file (0 bytes)
 ├── tsconfig.json                      # TypeScript compiler configuration (allowJs: true)
 ├── tsconfig.tsbuildinfo               # Incremental TypeScript compilation cache
 │
@@ -32,7 +31,7 @@ d:\CODES_D\nextjs-ca2/
 │   ├── favicon.ico                    # Website favicon
 │   ├── globals.css                    # Tailwind CSS v4 directives and CSS variables
 │   ├── layout.jsx                     # Root application layout (Geist font, Sonner Toaster)
-│   ├── page.jsx                       # Root landing page (default template)
+│   ├── page.jsx                       # Public marketing landing page (/)
 │   │
 │   ├── admin/                         # Admin portal routes
 │   │   ├── layout.jsx                 # Admin navigation bar and layout shell
@@ -74,7 +73,6 @@ d:\CODES_D\nextjs-ca2/
 │   │   ├── redemptions/route.js       # GET: Citizen's personal voucher list
 │   │   ├── rewards/route.js           # GET: Citizen catalog of active verified rewards
 │   │   ├── rewards/redeem/route.js    # POST: Atomic transactional coin redemption
-│   │   ├── transactions/route.js      # GET: Citizen Green Coins transaction ledger
 │   │   └── waste-submissions/route.js # POST: Upload, AI vision classify, reward coins
 │   │
 │   ├── auth/                          # Authentication pages
@@ -84,7 +82,7 @@ d:\CODES_D\nextjs-ca2/
 │   │
 │   ├── business/                      # Business merchant portal
 │   │   ├── page.jsx                   # Redirects to /business/dashboard
-│   │   └── dashboard/page.jsx         # Full merchant SPA (Vouchers, Catalog, Profile)
+│   │   └── dashboard/page.jsx         # Merchant SPA: voucher POS card + Rewards/Redemptions/Profile tabs
 │   │
 │   └── dashboard/                     # Citizen portal
 │       ├── page.jsx                   # Citizen dashboard overview (React Server Component)
@@ -103,11 +101,11 @@ d:\CODES_D\nextjs-ca2/
 │       └── sonner.jsx                 # Toast notification container (Sonner)
 │
 ├── lib/                               # Core utilities, services & authorization guards
-│   ├── adminAuth.js                   # Validates admin session against MongoDB
+│   ├── adminAuth.js                   # Re-export: getAuthenticatedAdmin from lib/auth.js
 │   ├── ai.js                          # OpenRouter multimodal vision classification engine
-│   ├── businessAuth.js                # Authoritative business role & profile resolver
-│   ├── categoryMapper.js              # [Unused/Legacy] Rule-based keyword text mapper
-│   ├── citizenAuth.js                 # Authoritative citizen session & balance resolver
+│   ├── auth.js                        # Shared session + database role guards (all three roles)
+│   ├── businessAuth.js                # Re-export: getAuthenticatedBusiness from lib/auth.js
+│   ├── citizenAuth.js                 # Re-export: getAuthenticatedCitizen from lib/auth.js
 │   ├── cloudinary.js                  # Cloudinary SDK client configuration
 │   ├── constants.js                   # Coin mapping & default confidence thresholds
 │   ├── db.js                          # Cached Mongoose connection helper (Serverless)
@@ -127,6 +125,10 @@ d:\CODES_D\nextjs-ca2/
 │
 ├── public/                            # Static web assets
 │   ├── file.svg, globe.svg, next.svg, vercel.svg, window.svg
+│
+├── project-learning-guide/            # This learning guide (12 Markdown chapters)
+│   ├── README.md
+│   ├── 01-project-structure.md ... 11-viva-preparation-masterclass.md
 │
 ├── scratch/                           # Developer debugging scripts
 │   └── inspect-users.js               # Utility script to inspect MongoDB users & businesses
@@ -151,7 +153,7 @@ To understand which files are actively executed versus auxiliary tooling, we cat
 | **Configuration & Tooling** | `package.json`, `next.config.js`, `postcss.config.mjs`, `eslint.config.mjs`, `components.json`, `jsconfig.json`, `tsconfig.json` | Project setup, CSS bundler rules, linting, and IDE alias resolution. |
 | **TypeScript Declarations** | `types/next-auth.d.ts`, `models/User.d.ts`, `models/Reward.d.ts`, `next-env.d.ts` | Type definitions retained to provide IDE IntelliSense for NextAuth session shapes and Mongoose documents without requiring TS compilation. |
 | **Database & Utility Scripts** | `scripts/seed.js`, `scratch/inspect-users.js` | Automation scripts executed via CLI to populate initial database records or inspect collection contents. |
-| **Unused / Legacy Files** | `lib/categoryMapper.js`, `test.txt`, `app/page.jsx` | Files identified through code auditing that are not consumed by the active application logic (explained in detail below). |
+| **Removed in this revision** | `lib/categoryMapper.js`, `app/api/transactions/route.js`, `test.txt` | Dead code that was deleted from the working tree. They are documented below so you can explain *why* they are gone if an examiner sees them in older commits. |
 
 ---
 
@@ -229,10 +231,16 @@ To understand which files are actively executed versus auxiliary tooling, we cat
   - `DEFAULT_CONFIDENCE_THRESHOLD`: Defaults to 70% (or `CONFIDENCE_THRESHOLD` env variable).
 - **Imported By:** `app/api/waste-submissions/route.js`, `app/api/admin/submissions/[id]/moderate/route.js`.
 
+#### `lib/auth.js`
+- **Location:** `d:\CODES_D\nextjs-ca2\lib\auth.js` (added after the earlier audit; currently untracked in Git)
+- **Why it exists:** Single implementation of the authoritative database-level role guards used by every API route. It owns one private `getSessionUser()` helper plus three exports: `getAuthenticatedAdmin`, `getAuthenticatedCitizen`, and `getAuthenticatedBusiness`.
+- **Key Design Decision:** JWT tokens are stored client-side in cookies and can become stale if an admin demotes a user or suspends a merchant. Each guard calls `getServerSession(authOptions)` and then re-reads the role from MongoDB (`User.findById(...)`, or a `Business` lookup for merchants) before permitting a privileged action.
+- **Return contract:** on failure every guard returns `{ errorResponse }` (a ready-made `NextResponse`); on success it returns role-specific fields (`{ user, dbUser }`, `{ user, citizen }`, or `{ user, business }`).
+- **Imported By:** `lib/citizenAuth.js`, `lib/businessAuth.js`, `lib/adminAuth.js`, and indirectly every protected route in `app/api/`.
+
 #### `lib/citizenAuth.js`, `lib/businessAuth.js`, `lib/adminAuth.js`
-- **Why they exist:** Authoritative database-level role re-verification helpers.
-- **Key Design Decision:** JWT tokens are stored client-side in cookies and can become stale if an admin demotes a user or suspends a merchant. These helpers call `User.findById(...)` in MongoDB to ensure the user's *current real-time role* matches the required permission before permitting privileged actions.
-- **Imported By:** Their respective API routes in `app/api/`.
+- **Current shape:** one-line re-export modules, e.g. `export { getAuthenticatedCitizen } from "@/lib/auth";`.
+- **Why keep them:** API routes import the role-named module (`@/lib/citizenAuth`), so the intent of each import stays obvious while the logic lives in one auditable place. Changing behaviour only needs `lib/auth.js` to be edited.
 
 #### `lib/normalizeIdentifier.js`
 - **Location:** `d:\CODES_D\nextjs-ca2\lib\normalizeIdentifier.js`
@@ -245,22 +253,30 @@ To understand which files are actively executed versus auxiliary tooling, we cat
 
 ---
 
-### Unused & Legacy Files Discovered
+### Removed Files & Current State
 
-During our comprehensive audit, three files were identified that require special explanation during your viva:
+The earlier revision of this guide described `lib/categoryMapper.js`, `test.txt`, and a default-template `app/page.jsx`. Two of those files have since been deleted and the landing page was rewritten, so describe the current state:
 
-1. **`lib/categoryMapper.js` (Unused / Legacy):**
-   - *What it contains:* A keyword-matching function `mapLabelsToCategory(labels)` that matches string keywords like "bottle", "carton" to waste categories.
-   - *Status:* **Not imported anywhere in the application.**
-   - *Explanation for Viva:* This was the original prototype implementation for mapping Google Cloud Vision text labels. It was superseded by `lib/ai.js`, which directly sends the image to OpenRouter multimodal vision LLMs to receive classification and confidence in a single step.
+1. **`lib/categoryMapper.js` — deleted (was unused):**
+   - *What it contained:* A keyword-matching `mapLabelsToCategory(labels)` helper for Google Cloud Vision text labels.
+   - *Status:* Removed from the working tree; nothing in `app/`, `lib/`, or `models/` references `categoryMapper` any more.
+   - *Explanation for Viva:* It was prototype code superseded by `lib/ai.js`, which sends the image to an OpenRouter multimodal model and receives category + confidence in one step. Deleting it removed a misleading alternative that was never executed.
 
-2. **`app/page.jsx` (Default Next.js Template):**
-   - *What it contains:* The boilerplate Next.js starter page displaying the Next.js logo and Vercel links.
-   - *Status:* Not linked in the user navigation.
-   - *Explanation for Viva:* The application routes users directly to `/auth/login`, `/dashboard`, `/business/dashboard`, or `/admin/dashboard`. The root index page remains as a framework placeholder.
+2. **`app/api/transactions/route.js` — deleted:**
+   - *What it contained:* A citizen-only `GET` endpoint returning the Green Coin ledger.
+   - *Status:* Removed. No page or component fetches `/api/transactions` any more.
+   - *Explanation for Viva:* Transaction history is rendered by the React Server Component `app/dashboard/transactions/page.jsx`, which queries `Transaction` directly on the server. The duplicate API endpoint added a second code path for the same data with no caller.
 
-3. **`test.txt` (Scratch File):**
-   - *Status:* An empty 0-byte file at the project root, likely left over from file system verification.
+3. **`test.txt` — deleted:**
+   - *Status:* The empty 0-byte scratch file at the project root has been removed.
 
-4. **`scratch/inspect-users.js`:**
+4. **`app/page.jsx` — rewritten, no longer the Next.js template:**
+   - *What it contains now:* A public marketing landing page: sticky header with *Sign In* / *Create Account*, a hero section, four "How GreenSort Works" feature cards, and a footer. It imports only `next/link` and `lucide-react` icons.
+   - *Status:* Reachable at `/`. `middleware.js` lists `/` in `PUBLIC_PATHS`, so it renders without a session; the header links route visitors to `/auth/login` and `/auth/register`.
+
+5. **`scratch/inspect-users.js`:**
    - *Status:* A local developer script used to inspect MongoDB user and business records via console logging. Not part of the production runtime.
+
+6. **`lib/utils.js` — present but unused:**
+   - *What it contains:* `export { cn } from "cn";` — a one-line re-export of the class-name merger.
+   - *Status:* No file imports `@/lib/utils`; every `components/ui/*` primitive imports `cn` straight from the `cn` package. Keep it only as a shadcn-compatible alias, or delete it in a future cleanup.

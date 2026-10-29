@@ -12,6 +12,8 @@ GreenSort organizes its layout system using Next.js nested layouts:
 RootLayout (app/layout.jsx)
 ├── Toaster (Sonner notification container)
 │
+├── HomePage (app/page.jsx — public landing page at /)
+│
 ├── AuthLayout (app/auth/layout.jsx)
 │   ├── LoginPage (app/auth/login/page.jsx)
 │   └── RegisterPage (app/auth/register/page.jsx)
@@ -23,7 +25,7 @@ RootLayout (app/layout.jsx)
 │   └── TransactionHistoryPage (RSC - app/dashboard/transactions/page.jsx)
 │
 ├── Business Portal (app/business/dashboard/page.jsx)
-│   └── Multi-tab SPA (Vouchers, Catalog, Profile, Analytics)
+│   └── Single page with a voucher POS card + three tabs (Rewards, Redemptions, Profile)
 │
 └── AdminLayout (app/admin/layout.jsx)
     ├── Admin Header & Navigation Bar
@@ -40,7 +42,12 @@ RootLayout (app/layout.jsx)
 
 ## 2. Citizen Pages Deep-Dive
 
-### A. Citizen Dashboard (`app/dashboard/page.jsx`)
+### A. Public Landing Page (`app/page.jsx`)
+- **Rendering Pattern:** static React Server Component (no session, no database).
+- **What it contains:** a sticky header with *Sign In* (`/auth/login`) and *Create Account* (`/auth/register`), a hero headline (*"Turn your segregated waste into Green Coins"*), four feature cards rendered from a local `features` array (`Upload Waste`, `AI Classification`, `Earn Green Coins`, `Redeem Rewards`, each with a Lucide icon), and a footer.
+- **Why it matters for Viva:** this is **not** the old `create-next-app` template any more. It is the only public page besides the auth screens, and `middleware.js` allow-lists `/` in `PUBLIC_PATHS` so it renders without a token.
+
+### B. Citizen Dashboard (`app/dashboard/page.jsx`)
 - **Rendering Pattern:** React Server Component (RSC)
 - **Key Concepts:** Async server-side data fetching with `Promise.all()`, direct Mongoose querying.
 
@@ -71,7 +78,7 @@ export default async function DashboardPage() {
 
 ---
 
-### B. Waste Submission Page (`app/dashboard/submit/page.jsx`)
+### C. Waste Submission Page (`app/dashboard/submit/page.jsx`)
 - **Rendering Pattern:** Client Component (`"use client"`)
 - **Key Hooks:** `useState`, `useEffect`, `useRef`, `useRouter`
 
@@ -107,7 +114,7 @@ function getIdempotencyKey(file, fallback) {
 
 ---
 
-### C. Rewards & Vouchers Page (`app/dashboard/rewards/page.jsx`)
+### D. Rewards & Vouchers Page (`app/dashboard/rewards/page.jsx`)
 - **Rendering Pattern:** Client Component (`"use client"`)
 - **Key Features:** Tab navigation ("Catalog" vs "My Vouchers"), real-time coin deductions, clipboard copying with feedback.
 
@@ -130,11 +137,16 @@ const handleCopyCode = async (code) => {
 
 ## 3. Business Merchant Dashboard (`app/business/dashboard/page.jsx`)
 
-The business portal is architected as an interactive **Single Page Application (SPA)** managing four primary feature tabs:
-1. **Rewards Management:** View active/inactive reward inventory, open modal to create rewards, edit price or quantity, or soft-delete rewards.
-2. **Voucher Validation (POS Scanner):** Real-time code entry where store cashiers enter customer voucher codes (e.g. `GS-M7X2KL-A4B9`). Displays instant customer name, discount details, and updates status to `redeemed`.
-3. **Redemption History:** Chronological log of all customer visits and vouchers claimed at this store.
-4. **Merchant Profile Settings:** Manage brand name, public description, store address, and contact email.
+The business portal (`app/business/dashboard/page.jsx`, ~841 lines) is an interactive **client-side SPA**. It loads `/api/business/dashboard`, `/api/business/rewards`, and `/api/business/redemptions` together in one `Promise.all` on mount, and refreshes the same triplet after a mutation.
+
+Structurally it has **one always-visible voucher card plus three tabs**:
+
+1. **Voucher Validation card (above the tabs):** cashiers type or paste a code (e.g. `GS-M7X2KL-A4B9`) and press *Validate & Redeem*. The card posts to `/api/business/vouchers/redeem`, then shows either a red error banner or a green success card with reward title, citizen name/email, coins used, code, and redemption date.
+2. **Tab 1 — Manage Rewards (`rewards`):** active/inactive inventory, a create-reward form, inline edits for price/quantity, and soft delete.
+3. **Tab 2 — Redemption History (`redemptions`):** chronological log of customer visits and vouchers claimed at this store.
+4. **Tab 3 — Store Profile (`profile`):** brand name, description, address, and contact email, saved with `PATCH /api/business/profile`.
+
+> The earlier revision of this guide described a separate “Vouchers” tab — there is no such tab. The POS form is the card rendered between the KPI strip and the tab bar, and the default `activeTab` is `"rewards"`.
 
 ---
 
@@ -145,7 +157,7 @@ The Admin Analytics portal renders five interactive time-series and categorical 
 2. **Categories Distribution (Doughnut Chart):** Segregation ratio across Plastic, Paper, Metal, Glass, Organic, E-waste.
 3. **Green Coins Awarded (Bar Chart):** Coin volume distributed across the date range.
 4. **Submission Statuses (Bar Chart):** Ratio of approved vs needs_review vs rejected items.
-5. **Redemption Statuses (Pie Chart):** Ratio of pending vs completed customer vouchers.
+5. **Redemption Statuses (Doughnut Chart):** Ratio of pending vs completed customer vouchers.
 
 ### Next.js Safe Dynamic Chart Lifecycle
 ```javascript
@@ -175,8 +187,12 @@ import("chart.js/auto").then(({ Chart, registerables }) => {
 
 GreenSort uses the **Shadcn UI** design system powered by **Tailwind CSS v4** and **Class Variance Authority (CVA)**:
 
-- **`button.jsx`:** Built on `@base-ui/react/button`. Uses `cva()` to offer variants (`default`, `outline`, `secondary`, `ghost`, `destructive`) and sizes (`default`, `sm`, `lg`, `icon`).
-- **`card.jsx`:** Compound components (`Card`, `CardHeader`, `CardTitle`, `CardDescription`, `CardContent`, `CardFooter`) styled with subtle border radii, drop shadows, and responsive padding.
-- **`input.jsx`:** Accessible input styled with Tailwind focus rings, invalid state borders (`aria-invalid`), and disabled opacity.
-- **`sonner.jsx`:** Mounts the `Sonner` toast provider with custom color themes (emerald for success, red for errors).
-- **`dashboard-logout.jsx`:** Shared client component that invokes NextAuth `signOut({ callbackUrl: "/auth/login" })`.
+- **`button.jsx`:** Built on `@base-ui/react/button`. Uses `cva()` for the variant/size matrix.
+- **`card.jsx`:** Compound components (`Card`, `CardHeader`, `CardTitle`, `CardDescription`, `CardContent`, `CardFooter`) with a `size: "default" | "sm"` prop.
+- **`input.jsx`:** Built on `@base-ui/react/input`, styled with `aria-invalid` borders and disabled opacity.
+- **`select.jsx`:** Built on `@base-ui/react/select` (`"use client"`), with Lucide chevron/check icons.
+- **`label.jsx`:** Small `"use client"` wrapper around `<label data-slot="label">`.
+- **`sonner.jsx`:** Mounts `sonner`'s `Toaster` with `next-themes` integration and Lucide status icons. `app/layout.jsx` renders `<Toaster position="top-right" />` once for the whole app.
+- **`dashboard-logout.jsx`:** Shared client component that calls NextAuth `signOut({ callbackUrl: "/auth/login" })`.
+
+> Note on styling: every primitive imports `cn` from the **`cn` npm package**, not from `@/lib/utils`. `lib/utils.js` still re-exports `cn` but nothing imports it, which is why it is listed as unused in Chapter 01.

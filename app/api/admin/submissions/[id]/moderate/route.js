@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 import { NextResponse } from "next/server";
 import { getAuthenticatedAdmin } from "@/lib/adminAuth";
 import dbConnect from "@/lib/db";
-import { COIN_MAPPING, DEFAULT_CONFIDENCE_THRESHOLD } from "@/lib/constants";
+import { COIN_MAPPING } from "@/lib/constants";
 import Transaction from "@/models/Transaction";
 import User from "@/models/User";
 import WasteSubmission from "@/models/WasteSubmission";
@@ -62,12 +62,8 @@ export async function PATCH(req, { params }) {
                 if (action === "approve") {
                     // Validate that the submission is eligible for approval
                     const category = submission.category;
-                    const confidence = submission.confidence ?? 0;
                     if (!category || category === "pending") {
                         throw new Error("Cannot approve a submission without a valid category.");
-                    }
-                    if (confidence < DEFAULT_CONFIDENCE_THRESHOLD) {
-                        throw new Error(`Cannot approve: confidence (${confidence}%) is below the required threshold (${DEFAULT_CONFIDENCE_THRESHOLD}%).`);
                     }
                     const coinsToAward = COIN_MAPPING[category] ?? 0;
                     if (coinsToAward <= 0) {
@@ -119,7 +115,7 @@ export async function PATCH(req, { params }) {
             if (error.message.includes("already")) {
                 return NextResponse.json({ error: error.message }, { status: 400 });
             }
-            if (error.message.includes("threshold") || error.message.includes("coin reward") || error.message.includes("category")) {
+            if (error.message.includes("coin reward") || error.message.includes("category")) {
                 return NextResponse.json({ error: error.message }, { status: 400 });
             }
             if (error.message.includes("not found")) {
